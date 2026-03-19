@@ -103,6 +103,21 @@ kubectl delete -f scheduling/04-topology-spread.yaml
 
 
 ## ─────────────────────────────────────────
+## デモ5の前に Taint を付与（専用ノード化）
+## ─────────────────────────────────────────
+
+NODE3=$(kubectl get nodes --selector='topology.kubernetes.io/zone=zone-c' \
+  -o jsonpath='{.items[0].metadata.name}')
+
+kubectl label node $NODE3 dedicated=high-performance --overwrite
+kubectl taint nodes $NODE3 dedicated=high-performance:NoSchedule
+
+# 確認
+kubectl describe node k8s-demo-worker3 | grep -A3 "Taints:"
+#   → Taints: dedicated=high-performance:NoSchedule
+
+
+## ─────────────────────────────────────────
 ## デモ5: Taint / Toleration（専用ノード）
 ## 「worker3 は許可証を持つ Pod だけ入れる」
 ## ─────────────────────────────────────────
