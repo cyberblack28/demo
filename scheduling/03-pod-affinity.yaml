@@ -1,0 +1,118 @@
+# =============================================================
+# デモ3: Pod Affinity / Anti-Affinity
+#
+# kind クラスタ構成（worker / worker2 / worker3 の3ノード）
+#
+# Step1: cache Pod（Redis）を 2つデプロイ → worker と worker2 に配置
+# Step2: app Pod を 2つデプロイ
+#   - Pod Affinity  : cache がいるノードの近くに配置（同居）
+#   - Anti-Affinity : app Pod 同士は別ノードに配置
+#
+# 見せるポイント:
+#   replicas=3 にスケールアップ → 3つ目は Pending になる
+#   （cache がいるのは2ノードのみ、かつ app 同士は同居不可）
+# =============================================================
+
+# Step1: cache Pod（Affinityのターゲット）
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: demo-cache
+  labels:
+    app: demo-cache
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: demo-cache
+  template:
+    metadata:
+      labels:
+        app: demo-cache
+        tier: cache
+    spec:
+      # cache 同士も別ノードに分散（worker / worker2 に1つずつ）
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+          - labelSelector:
+              matchExpressions:
+              - key: tier
+                operator: In
+                values:
+                - cache
+            topologyKey: kubernetes.io/hostname
+      containers:
+      - name: cache
+        image: redis:alpine
+        resources:
+          requests:
+            cpu: "50m"
+            memory: "32Mi"
+          limits:
+            memory: "64Mi"
+
+---
+# Step2: app Pod
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: demo-pod-affinity
+  labels:
+    app: demo-pod-affinity
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: demo-pod-affinity
+  template:
+    metadata:
+      labels:
+        app: demo-pod-affinity
+        tier: app
+    spec:
+      affinity:
+        # ---- Pod Affinity: cache がいるノードに同居 ----
+        podAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+          - labelSelector:
+              matchExpressions:
+              - key: tier
+                operator: In
+                values:
+                - cache
+            topologyKey: kubernetes.io/hostname
+        # ---- Pod Anti-Affinity: app 同士は別ノード ----
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+          - labelSelector:
+              matchExpressions:
+              - key: tier
+                operator: In
+                values:
+                - app
+            topologyKey: kubernetes.io/hostname
+      containers:
+      - name: app
+        image: nginx:alpine
+        resources:
+          requests:
+            cpu: "50m"
+            memory: "32Mi"
+          limits:
+            memory: "64Mi"
+
+---
+# 確認コマンド:
+# kubectl apply -f 03-pod-affinity.yaml
+# kubectl get pods -o wide
+#   → cache は worker / worker2 に1つずつ
+#   → app   は cache がいる worker / worker2 に1つずつ（Affinity）
+#   → app 同士は同じノードにいない（Anti-Affinity）
+#
+# スケールアップして Pending を体感:
+# kubectl scale deployment demo-pod-affinity --replicas=3
+# kubectl get pods -o wide
+#   → 3つ目の app は cache がいないノード or app がすでにいるノードしかなく Pending
+#
+# kubectl delete -f 03-pod-affinity.yaml

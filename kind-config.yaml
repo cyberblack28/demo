@@ -1,0 +1,24 @@
+# =============================================================
+# kind クラスタ設定（デモ用 3ノード構成）
+# worker ノードに zone / disktype ラベルを事前付与
+#
+# 使い方:
+#   kind create cluster --config kind-config.yaml --name k8s-demo
+#   kubectl cluster-info --context kind-k8s-demo
+# =============================================================
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+nodes:
+- role: control-plane
+- role: worker
+  labels:
+    topology.kubernetes.io/zone: zone-a
+    disktype: ssd
+- role: worker
+  labels:
+    topology.kubernetes.io/zone: zone-b
+    disktype: hdd
+- role: worker
+  labels:
+    topology.kubernetes.io/zone: zone-c
+    disktype: ssd

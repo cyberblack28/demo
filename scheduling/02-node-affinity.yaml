@@ -1,0 +1,70 @@
+# =============================================================
+# デモ2: Node Affinity（条件指定）
+#
+# kind クラスタ構成:
+#   k8s-demo-worker  : zone-a / disktype=ssd
+#   k8s-demo-worker2 : zone-b / disktype=hdd
+#   k8s-demo-worker3 : zone-c / disktype=ssd  ← Taint あり（デモ5用）
+#
+# required : zone-a か zone-b のノードにのみ配置（zone-c は除外）
+# preferred: disktype=ssd を優先（weight=80）
+#
+# → worker(zone-a/ssd) に優先配置
+# → worker2(zone-b/hdd) にも配置されるが優先度低
+# → worker3(zone-c) には配置されない（required で除外）
+# =============================================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: demo-node-affinity
+  labels:
+    app: demo-node-affinity
+spec:
+  replicas: 6
+  selector:
+    matchLabels:
+      app: demo-node-affinity
+  template:
+    metadata:
+      labels:
+        app: demo-node-affinity
+    spec:
+      affinity:
+        nodeAffinity:
+          # ---- 必須条件: zone-a または zone-b のノード ----
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - key: topology.kubernetes.io/zone
+                operator: In
+                values:
+                - zone-a
+                - zone-b
+          # ---- 推奨条件: disktype=ssd を優先（weight=80） ----
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 80
+            preference:
+              matchExpressions:
+              - key: disktype
+                operator: In
+                values:
+                - ssd
+      containers:
+      - name: app
+        image: nginx:alpine
+        resources:
+          requests:
+            cpu: "50m"
+            memory: "32Mi"
+          limits:
+            memory: "64Mi"
+
+---
+# 確認コマンド:
+# kubectl apply -f 02-node-affinity.yaml
+# kubectl get pods -o wide
+#   → worker(zone-a/ssd) に多めに配置される（preferred weight=80）
+#   → worker2(zone-b/hdd) にも配置されるが少なめ
+#   → worker3(zone-c) には1つも配置されない（required で除外）
+#
+# kubectl delete -f 02-node-affinity.yaml

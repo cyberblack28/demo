@@ -1,0 +1,72 @@
+# =============================================================
+# デモ4: Topology Spread Constraint（均等配置）
+#
+# kind クラスタ構成（worker / worker2 / worker3 の3ノード）
+#
+# 【デモ3との比較】
+# Anti-Affinity: replicas > ノード数 になると Pending で詰まる
+# Topology Spread（ScheduleAnyway）: 偏りを許容して全Pod配置できる
+#
+# 見せるポイント:
+#   replicas=6  → 各ノードに2つずつ均等配置
+#   replicas=9  → 各ノードに3つずつ均等配置
+#   replicas=7  → 1ノードだけ3つ、残り2つ（maxSkew=1 の範囲内）
+# =============================================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: demo-topology-spread
+  labels:
+    app: demo-topology-spread
+spec:
+  replicas: 6
+  selector:
+    matchLabels:
+      app: demo-topology-spread
+  template:
+    metadata:
+      labels:
+        app: demo-topology-spread
+    spec:
+      topologySpreadConstraints:
+      # ---- ゾーン間で均等分散（偏り最大1まで許容） ----
+      - maxSkew: 1
+        topologyKey: topology.kubernetes.io/zone
+        whenUnsatisfiable: DoNotSchedule      # 守れない場合は配置しない
+        labelSelector:
+          matchLabels:
+            app: demo-topology-spread
+      # ---- ノード間でも均等分散（偏り許容・ベストエフォート） ----
+      - maxSkew: 1
+        topologyKey: kubernetes.io/hostname
+        whenUnsatisfiable: ScheduleAnyway    # 守れなくても配置する
+        labelSelector:
+          matchLabels:
+            app: demo-topology-spread
+      containers:
+      - name: app
+        image: nginx:alpine
+        resources:
+          requests:
+            cpu: "50m"
+            memory: "32Mi"
+          limits:
+            memory: "64Mi"
+
+---
+# 確認コマンド:
+# kubectl apply -f 04-topology-spread.yaml
+# kubectl get pods -o wide
+#   → 6 Pod が 3ノードに各2つずつ均等配置
+#
+# replicas を変えて挙動を確認:
+# kubectl scale deployment demo-topology-spread --replicas=9
+#   → 各ノード3つずつに均等配置
+# kubectl scale deployment demo-topology-spread --replicas=7
+#   → 1ノードだけ3つ、残り2つ（maxSkew=1 の範囲内で許容）
+#
+# Anti-Affinity との違い（デモ3との比較）:
+# Anti-Affinity で replicas=4 にすると Pending になるが
+# Topology Spread (ScheduleAnyway) は偏っても配置を続ける
+#
+# kubectl delete -f 04-topology-spread.yaml

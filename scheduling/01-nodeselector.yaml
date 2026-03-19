@@ -1,0 +1,50 @@
+# =============================================================
+# デモ1: nodeSelector（単純なノード選択）
+#
+# kind クラスタ構成（kind-config.yaml で定義）:
+#   k8s-demo-worker  : zone-a / disktype=ssd
+#   k8s-demo-worker2 : zone-b / disktype=hdd
+#   k8s-demo-worker3 : zone-c / disktype=ssd
+#
+# 「disktype=ssd」ラベルを持つノードにのみ配置
+# → worker(zone-a) と worker3(zone-c) に配置
+# → worker2(zone-b / hdd) には1つも配置されない
+# =============================================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: demo-nodeselector
+  labels:
+    app: demo-nodeselector
+spec:
+  replicas: 4
+  selector:
+    matchLabels:
+      app: demo-nodeselector
+  template:
+    metadata:
+      labels:
+        app: demo-nodeselector
+    spec:
+      # ---- ここがポイント ----
+      nodeSelector:
+        disktype: ssd    # ssd ラベルのノード（worker / worker3）にのみ配置
+      # ----------------------
+      containers:
+      - name: app
+        image: nginx:alpine
+        resources:
+          requests:
+            cpu: "50m"
+            memory: "32Mi"
+          limits:
+            memory: "64Mi"
+
+---
+# 確認コマンド:
+# kubectl apply -f 01-nodeselector.yaml
+# kubectl get pods -o wide
+#   → NODE列が k8s-demo-worker か k8s-demo-worker3 のみ
+#   → k8s-demo-worker2 には1つも配置されない
+#
+# kubectl delete -f 01-nodeselector.yaml

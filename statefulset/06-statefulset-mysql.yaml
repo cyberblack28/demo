@@ -1,0 +1,163 @@
+# =============================================================
+# デモ6: StatefulSet - MySQL（kind 対応版）
+#
+# kind の StorageClass は "standard"（local-path provisioner）
+# ReadWriteOnce のみサポート → MySQL に最適
+#
+# デモで見せるポイント:
+#   1. Pod名が固定（mysql-0, mysql-1, mysql-2）
+#   2. 各Podが専用PVCを持つ（data-mysql-0 など）
+#   3. 起動が順番（0→1→2）、停止が逆順（2→1→0）
+#   4. Pod削除後も同じ名前・同じPVCで復活
+#   5. 固定DNSでPodに直接アクセスできる
+# =============================================================
+
+# Step1: Secret（MySQLのrootパスワード）
+apiVersion: v1
+kind: Secret
+metadata:
+  name: mysql-secret
+type: Opaque
+stringData:
+  mysql-root-password: "Demo1234!"
+
+---
+# Step2: Headless Service
+# ClusterIP: None → mysql-0.mysql-svc.default.svc.cluster.local でアクセス可能
+apiVersion: v1
+kind: Service
+metadata:
+  name: mysql-svc
+  labels:
+    app: mysql
+spec:
+  clusterIP: None
+  selector:
+    app: mysql
+  ports:
+  - port: 3306
+    name: mysql
+
+---
+# Step3: StatefulSet 本体
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: mysql
+spec:
+  serviceName: "mysql-svc"
+  replicas: 3
+  selector:
+    matchLabels:
+      app: mysql
+  template:
+    metadata:
+      labels:
+        app: mysql
+    spec:
+      # Pod Anti-Affinity: 各Podを別ノードに分散
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchExpressions:
+                - key: app
+                  operator: In
+                  values:
+                  - mysql
+              topologyKey: kubernetes.io/hostname
+
+      # Init コンテナ: mysql-0 を Primary、それ以外を Replica として設定
+      initContainers:
+      - name: init-mysql
+        image: mysql:8.0
+        command:
+        - bash
+        - -c
+        - |
+          set -ex
+          INDEX=$(hostname | awk -F'-' '{print $NF}')
+          echo "Pod index: $INDEX"
+          if [[ $INDEX -eq 0 ]]; then
+            echo "Role: Primary (server-id=100)"
+            cat > /etc/mysql/conf.d/role.cnf <<EOF
+          [mysqld]
+          server-id=100
+          log-bin=mysql-bin
+          binlog-format=ROW
+          EOF
+          else
+            SERVER_ID=$((100 + $INDEX))
+            echo "Role: Replica (server-id=${SERVER_ID})"
+            cat > /etc/mysql/conf.d/role.cnf <<EOF
+          [mysqld]
+          server-id=${SERVER_ID}
+          relay-log=relay-bin
+          read-only=1
+          EOF
+          fi
+        volumeMounts:
+        - name: conf
+          mountPath: /etc/mysql/conf.d
+
+      containers:
+      - name: mysql
+        image: mysql:8.0
+        env:
+        - name: MYSQL_ROOT_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: mysql-secret
+              key: mysql-root-password
+        - name: MYSQL_DATABASE
+          value: "demodb"
+        ports:
+        - containerPort: 3306
+          name: mysql
+        volumeMounts:
+        - name: data
+          mountPath: /var/lib/mysql
+        - name: conf
+          mountPath: /etc/mysql/conf.d
+        resources:
+          requests:
+            cpu: "250m"
+            memory: "512Mi"
+          limits:
+            memory: "1Gi"
+        readinessProbe:
+          exec:
+            command:
+            - bash
+            - -c
+            - mysql -u root -p"${MYSQL_ROOT_PASSWORD}" -e "SELECT 1" 2>/dev/null
+          initialDelaySeconds: 20
+          periodSeconds: 10
+          timeoutSeconds: 5
+        livenessProbe:
+          exec:
+            command:
+            - bash
+            - -c
+            - mysqladmin -u root -p"${MYSQL_ROOT_PASSWORD}" ping 2>/dev/null
+          initialDelaySeconds: 30
+          periodSeconds: 15
+          timeoutSeconds: 5
+
+      volumes:
+      - name: conf
+        emptyDir: {}
+
+  # ---- PVC テンプレート ----
+  # kind のデフォルト StorageClass "standard"（local-path provisioner）を使用
+  volumeClaimTemplates:
+  - metadata:
+      name: data
+    spec:
+      accessModes: ["ReadWriteOnce"]
+      storageClassName: "standard"   # kind のデフォルト
+      resources:
+        requests:
+          storage: 1Gi               # kind はローカルなので小さめで十分

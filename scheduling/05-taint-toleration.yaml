@@ -1,0 +1,92 @@
+# =============================================================
+# デモ5: Taint / Toleration（専用ノード）
+#
+# kind クラスタ構成:
+#   k8s-demo-worker  : zone-a / disktype=ssd
+#   k8s-demo-worker2 : zone-b / disktype=hdd
+#   k8s-demo-worker3 : zone-c / disktype=ssd ← Taint 付き（専用ノード）
+#
+# Taint は 00-setup-kind.sh で付与済み:
+#   dedicated=high-performance:NoSchedule
+#
+# 見せるポイント:
+#   no-toleration  → worker / worker2 にしか配置されない
+#   with-toleration → worker3 にも配置可能になる
+# =============================================================
+
+# Step1: Toleration なし → worker3 には配置されない
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: demo-no-toleration
+  labels:
+    app: demo-no-toleration
+spec:
+  replicas: 4
+  selector:
+    matchLabels:
+      app: demo-no-toleration
+  template:
+    metadata:
+      labels:
+        app: demo-no-toleration
+    spec:
+      # tolerations を指定しない → worker3(Tainted) には配置されない
+      containers:
+      - name: app
+        image: nginx:alpine
+        resources:
+          requests:
+            cpu: "50m"
+            memory: "32Mi"
+          limits:
+            memory: "64Mi"
+
+---
+# Step2: Toleration あり → worker3 にも配置可能
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: demo-with-toleration
+  labels:
+    app: demo-with-toleration
+spec:
+  replicas: 4
+  selector:
+    matchLabels:
+      app: demo-with-toleration
+  template:
+    metadata:
+      labels:
+        app: demo-with-toleration
+    spec:
+      # ---- ここがポイント: worker3 の Taint を許容 ----
+      tolerations:
+      - key: "dedicated"
+        operator: "Equal"
+        value: "high-performance"
+        effect: "NoSchedule"
+      # -------------------------------------------------
+      containers:
+      - name: app
+        image: nginx:alpine
+        resources:
+          requests:
+            cpu: "50m"
+            memory: "32Mi"
+          limits:
+            memory: "64Mi"
+
+---
+# 確認コマンド:
+# kubectl apply -f 05-taint-toleration.yaml
+# kubectl get pods -o wide
+#   → demo-no-toleration  : worker / worker2 のみ（worker3 は Taint で弾かれる）
+#   → demo-with-toleration: worker / worker2 / worker3 すべてに配置可能
+#
+# 補足:
+#   Toleration は「worker3 に乗れる許可証」
+#   ただし許可証があっても必ず worker3 に行くわけではない
+#   worker3 に限定したい場合は nodeSelector や Node Affinity を組み合わせる
+#
+# kubectl delete -f 05-taint-toleration.yaml
