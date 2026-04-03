@@ -27,8 +27,7 @@ k8s-demo/
 │   ├── 04-topology-spread.yaml       # デモ4: Topology Spread Constraint
 │   └── 05-taint-toleration.yaml      # デモ5: Taint / Toleration
 └── statefulset/
-    ├── 06-statefulset-mysql.yaml     # デモ6: StatefulSet（MySQL）
-    └── MYSQL-DEMO-RUNBOOK.md         # StatefulSet デモ詳細手順
+    └── 06-statefulset-mysql.yaml     # デモ6: StatefulSet（MySQL）
 ```
 
 ---
