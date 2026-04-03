@@ -139,6 +139,11 @@ kubectl delete -f scheduling/05-taint-toleration.yaml
 ## 詳細は statefulset/MYSQL-DEMO-RUNBOOK.md を参照
 ## ─────────────────────────────────────────
 
+kubectl taint nodes k8s-demo-worker3 dedicated=high-performance:NoSchedule-
+
+# 解除されたことを確認（Taints: <none> になること）
+kubectl describe node k8s-demo-worker3 | grep -A3 "Taints:"
+
 kubectl apply -f statefulset/06-statefulset-mysql.yaml
 
 # 1. 順番起動を確認（0 → 1 → 2）
@@ -152,6 +157,7 @@ kubectl get pvc
 # 3. Init コンテナで Primary / Replica が自動判別されていることを確認
 kubectl logs mysql-0 -c init-mysql   # → Role: Primary (server-id=100)
 kubectl logs mysql-1 -c init-mysql   # → Role: Replica (server-id=101)
+kubectl logs mysql-2 -c init-mysql   # → Role: Replica (server-id=102)
 
 # 4. データ書き込み
 kubectl exec -it mysql-0 -- mysql -u root -p"Demo1234!" demodb -e "
