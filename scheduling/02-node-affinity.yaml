@@ -4,14 +4,14 @@
 # kind クラスタ構成:
 #   k8s-demo-worker  : zone-a / disktype=ssd
 #   k8s-demo-worker2 : zone-b / disktype=hdd
-#   k8s-demo-worker3 : zone-c / disktype=ssd  ← Taint あり（デモ5用）
+#   k8s-demo-worker3 : zone-c / disktype=ssd（Taintなし）
 #
 # required : zone-a か zone-b のノードにのみ配置（zone-c は除外）
-# preferred: disktype=ssd を優先（weight=80）
+# preferred: disktype=ssd を優先（weight=20）
 #
-# → worker(zone-a/ssd) に優先配置
-# → worker2(zone-b/hdd) にも配置されるが優先度低
-# → worker3(zone-c) には配置されない（required で除外）
+# → worker(zone-a/ssd) に多めに配置される（preferred）
+# → worker2(zone-b/hdd) にも配置される（required の範囲内）
+# → worker3(zone-c) には1つも配置されない（required で除外）
 # =============================================================
 apiVersion: apps/v1
 kind: Deployment
@@ -40,9 +40,10 @@ spec:
                 values:
                 - zone-a
                 - zone-b
-          # ---- 推奨条件: disktype=ssd を優先（weight=80） ----
+          # ---- 推奨条件: disktype=ssd を優先（weight=20） ----
+          # weight を下げることで worker に集中せず worker2 にも分散される
           preferredDuringSchedulingIgnoredDuringExecution:
-          - weight: 80
+          - weight: 20
             preference:
               matchExpressions:
               - key: disktype
@@ -63,8 +64,8 @@ spec:
 # 確認コマンド:
 # kubectl apply -f 02-node-affinity.yaml
 # kubectl get pods -o wide
-#   → worker(zone-a/ssd) に多めに配置される（preferred weight=80）
-#   → worker2(zone-b/hdd) にも配置されるが少なめ
+#   → worker(zone-a/ssd) と worker2(zone-b/hdd) に配置される
+#   → worker に多めに配置される傾向がある（preferred weight=20）
 #   → worker3(zone-c) には1つも配置されない（required で除外）
 #
 # kubectl delete -f 02-node-affinity.yaml

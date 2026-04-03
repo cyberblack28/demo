@@ -6,9 +6,10 @@
 #   k8s-demo-control-plane : control-plane（Pod は配置されない）
 #   k8s-demo-worker        : zone-a / disktype=ssd
 #   k8s-demo-worker2       : zone-b / disktype=hdd
-#   k8s-demo-worker3       : zone-c / disktype=ssd / Taint: dedicated=high-performance:NoSchedule
+#   k8s-demo-worker3       : zone-c / disktype=ssd（Taintなし）
 #
 # 事前準備: bash 00-setup-kind.sh を実行済みであること
+# ※ Taint はデモ5の直前に手動で付与する
 # ============================================================
 
 
@@ -16,9 +17,12 @@
 ## 発表前の動作確認
 ## ─────────────────────────────────────────
 
-# ノード構成を確認（ラベル・Taintが正しいこと）
+# ノード構成を確認（ラベルが正しいこと）
 kubectl get nodes --show-labels
+
+# worker3 に Taint がないことを確認（デモ1〜4はTaintなしで実施）
 kubectl describe node k8s-demo-worker3 | grep -A3 "Taints:"
+#   → Taints: <none>
 
 # 前回の残骸がないことを確認
 kubectl get pods,deployments,statefulset,pvc
@@ -33,7 +37,7 @@ kubectl apply -f scheduling/01-nodeselector.yaml
 kubectl get pods -o wide
 
 # ポイント:
-#   → worker(ssd) と worker3(ssd) にだけ配置される
+#   → worker(zone-a/ssd) と worker3(zone-c/ssd) にだけ配置される
 #   → worker2(hdd) には1つも配置されない
 #   → シンプルだが「In / NotIn」のような条件式は書けない → Node Affinity へ
 
@@ -50,8 +54,8 @@ kubectl get pods -o wide
 
 # ポイント:
 #   → worker3(zone-c) には1つも配置されない（required 条件で除外）
-#   → worker(zone-a/ssd) に多めに配置される（preferred weight=80）
-#   → worker2(zone-b/hdd) にも配置されるが少なめ
+#   → worker(zone-a/ssd) と worker2(zone-b/hdd) に配置される
+#   → worker に多めに配置される傾向がある（preferred weight=20）
 #   → nodeSelector より柔軟な「必須 / 推奨」の2段階で制御できる
 
 kubectl delete -f scheduling/02-node-affinity.yaml
@@ -69,12 +73,12 @@ kubectl get pods -o wide
 #   → cache は worker / worker2 に1つずつ（Anti-Affinity で分散）
 #   → app は cache がいる worker / worker2 に同居（Pod Affinity）
 #   → app 同士は同じノードにいない（Pod Anti-Affinity）
+#   ※ worker3 には cache がいないため app の Affinity 条件を満たせない
 
 # replicas を増やして Pending を体感
 kubectl scale deployment demo-pod-affinity --replicas=3
 kubectl get pods -o wide
 #   → 3つ目の app は置ける場所がなく Pending になる
-#   （cache がいない worker3 には Affinity が満たせず配置不可）
 #   → これを解決するのが Topology Spread（次のデモへ）
 
 kubectl delete -f scheduling/03-pod-affinity.yaml
@@ -103,16 +107,13 @@ kubectl delete -f scheduling/04-topology-spread.yaml
 
 
 ## ─────────────────────────────────────────
-## デモ5の前に Taint を付与（専用ノード化）
+## デモ5の直前: Taint を付与（専用ノード化）
 ## ─────────────────────────────────────────
 
-NODE3=$(kubectl get nodes --selector='topology.kubernetes.io/zone=zone-c' \
-  -o jsonpath='{.items[0].metadata.name}')
+kubectl label node k8s-demo-worker3 dedicated=high-performance --overwrite
+kubectl taint nodes k8s-demo-worker3 dedicated=high-performance:NoSchedule
 
-kubectl label node $NODE3 dedicated=high-performance --overwrite
-kubectl taint nodes $NODE3 dedicated=high-performance:NoSchedule
-
-# 確認
+# 付与されたことを確認
 kubectl describe node k8s-demo-worker3 | grep -A3 "Taints:"
 #   → Taints: dedicated=high-performance:NoSchedule
 
@@ -135,8 +136,8 @@ kubectl delete -f scheduling/05-taint-toleration.yaml
 
 
 ## ─────────────────────────────────────────
-## デモ6: StatefulSet（MySQL）
-## 詳細は statefulset/MYSQL-DEMO-RUNBOOK.md を参照
+## デモ5 → デモ6 の間: Taint を解除
+## worker3 を StatefulSet の配置先として開放する
 ## ─────────────────────────────────────────
 
 kubectl taint nodes k8s-demo-worker3 dedicated=high-performance:NoSchedule-
@@ -144,47 +145,97 @@ kubectl taint nodes k8s-demo-worker3 dedicated=high-performance:NoSchedule-
 # 解除されたことを確認（Taints: <none> になること）
 kubectl describe node k8s-demo-worker3 | grep -A3 "Taints:"
 
+
+## ─────────────────────────────────────────
+## デモ6: StatefulSet（MySQL）
+## ─────────────────────────────────────────
+
 kubectl apply -f statefulset/06-statefulset-mysql.yaml
 
-# 1. 順番起動を確認（0 → 1 → 2）
+
+## Step 1: デプロイ → 順番起動を確認
+## ポイント:「Deploymentと違い、0→1→2の順で起動する」
+
 kubectl get pods -w
-# Ctrl+C
+# 出力イメージ:
+#   mysql-0   0/1   Init:0/1   → Running
+#   mysql-1   0/1   Init:0/1   → Running  ← 0が Ready になってから起動
+#   mysql-2   0/1   Init:0/1   → Running  ← 1が Ready になってから起動
+# Ctrl+C で抜ける
 
-# 2. Pod名・PVC の固定を確認
+# 説明ポイント:
+#   Deployment/ReplicaSet は並列起動
+#   StatefulSet は前の Pod が Ready になってから次を起動
+#   → DB クラスタの初期化順序を保証するために必須
+
+
+## Step 2: Pod名・PVC・DNS の固定を確認
+## ポイント:「各 Pod が固有の ID・ストレージ・名前を持つ」
+
+# Pod名が固定（mysql-0, mysql-1, mysql-2）
 kubectl get pods -o wide
-kubectl get pvc
 
-# 3. Init コンテナで Primary / Replica が自動判別されていることを確認
+# 各 Pod に PVC が 1対1 で割り当てられていることを確認
+kubectl get pvc
+# 出力イメージ:
+#   data-mysql-0   Bound   ...   1Gi
+#   data-mysql-1   Bound   ...   1Gi
+#   data-mysql-2   Bound   ...   1Gi
+
+# Init コンテナが Primary と Replica を自動判別していることを確認
 kubectl logs mysql-0 -c init-mysql   # → Role: Primary (server-id=100)
 kubectl logs mysql-1 -c init-mysql   # → Role: Replica (server-id=101)
 kubectl logs mysql-2 -c init-mysql   # → Role: Replica (server-id=102)
 
-# 4. データ書き込み
+
+## Step 3: MySQL にデータを書き込む
+## ポイント:「PVC にデータが永続化される」
+
 kubectl exec -it mysql-0 -- mysql -u root -p"Demo1234!" demodb -e "
   CREATE TABLE IF NOT EXISTS demo (id INT AUTO_INCREMENT PRIMARY KEY, value VARCHAR(100));
   INSERT INTO demo (value) VALUES ('hello from StatefulSet');
   SELECT * FROM demo;
 "
 
-# 5. 固定 DNS でアクセス
+# 固定 DNS で mysql-0 に直接アクセス（別 Pod から）
 kubectl run mysql-client --image=mysql:8.0 --rm -it --restart=Never -- \
   mysql -h mysql-0.mysql-svc.default.svc.cluster.local \
         -u root -p"Demo1234!" demodb -e "SELECT * FROM demo;"
+#   → mysql-0 の固定 DNS で確実にアクセスできることを確認
 
-# 6. Pod削除 → 同じ名前・同じ PVC で復活（最大の見せ場）
+
+## Step 4: Pod 削除 → 同じ名前・同じ PVC で復活（最大の見せ場）
+## ポイント:「Deployment と決定的に違う点」
+
 kubectl delete pod mysql-1
 kubectl get pods -w
-kubectl get pvc
-#   → mysql-1 として再起動、data-mysql-1 は残ったまま再バインド
+#   → mysql-1 として再起動（ランダム名にならない）
 
-# 7. スケールダウン（逆順停止）
+kubectl get pvc
+#   → data-mysql-1 は削除されずに再バインドされる
+
+# 説明ポイント:
+#   Deployment なら再作成 Pod はランダムな ID になり
+#   別の PVC にバインドされてデータが消える
+#   StatefulSet なら mysql-1 は必ず mysql-1 に戻り
+#   data-mysql-1 のデータを引き継ぐ
+
+
+## Step 5: スケールダウン → 逆順停止を確認
+## ポイント:「DB クラスタの整合性を保つための順序保証」
+
 kubectl scale statefulset mysql --replicas=1
 kubectl get pods -w
-#   → mysql-2 → mysql-1 の順で削除
+#   → mysql-2 → mysql-1 の順で削除される（逆順）
 
-# クリーンアップ
+kubectl get pvc
+#   → data-mysql-1, data-mysql-2 の PVC は残る
+#   → スケールインしてもデータは保持される
+
+
+## クリーンアップ
 kubectl delete -f statefulset/06-statefulset-mysql.yaml
-kubectl delete pvc -l app=mysql
+kubectl delete pvc -l app=mysql   # PVC は手動削除が必要（データ保護のため自動削除されない）
 
 
 ## ─────────────────────────────────────────

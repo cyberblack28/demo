@@ -6,8 +6,8 @@
 #   k8s-demo-worker2 : zone-b / disktype=hdd
 #   k8s-demo-worker3 : zone-c / disktype=ssd ← Taint 付き（専用ノード）
 #
-# Taint は 00-setup-kind.sh で付与済み:
-#   dedicated=high-performance:NoSchedule
+# Taint はデモ5直前に DEMO-RUNBOOK.md の手順で付与する:
+#   kubectl taint nodes k8s-demo-worker3 dedicated=high-performance:NoSchedule
 #
 # 見せるポイント:
 #   no-toleration  → worker / worker2 にしか配置されない
